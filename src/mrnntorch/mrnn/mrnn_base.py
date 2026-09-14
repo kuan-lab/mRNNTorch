@@ -907,13 +907,19 @@ class mRNNBase(nn.Module):
     @property
     def hid_noise_const(self):
         """noise constant used for hidden activity"""
-        const_hid = (1 / self.alpha) * np.sqrt(2 * self.alpha * self.sigma_recur**2)
+        # Use the scalar reference gain (excitatory dt/tau). When alpha is a
+        # per-unit vector (separate inhibitory tau), a scalar keeps the OU noise
+        # scale identical to the scalar-tau baseline and avoids np.sqrt on a
+        # tensor. Falls back to self.alpha for subclasses that don't set it.
+        alpha = getattr(self, "alpha_scalar", self.alpha)
+        const_hid = (1 / alpha) * np.sqrt(2 * alpha * self.sigma_recur**2)
         return const_hid
 
     @property
     def inp_noise_const(self):
         """noise constant used for inputs"""
-        const_inp = (1 / self.alpha) * np.sqrt(2 * self.alpha * self.sigma_input**2)
+        alpha = getattr(self, "alpha_scalar", self.alpha)
+        const_inp = (1 / alpha) * np.sqrt(2 * alpha * self.sigma_input**2)
         return const_inp
 
     def _hid_noise(self, batch_shape: int):

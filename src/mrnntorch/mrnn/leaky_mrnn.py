@@ -22,6 +22,7 @@ DEFAULTS_MRNN = {
     "device": "cuda",
     "dt": 10,
     "tau": 100,
+    "tau_inh": None,
 }
 
 
@@ -47,6 +48,7 @@ class mRNN(mRNNBase):
         device: str = DEFAULTS_MRNN["device"],
         dt: float = DEFAULTS_MRNN["dt"],
         tau: float = DEFAULTS_MRNN["tau"],
+        tau_inh: float | None = DEFAULTS_MRNN["tau_inh"],
     ):
         """Initialize a leaky multi-regional RNN.
 
@@ -62,7 +64,14 @@ class mRNN(mRNNBase):
             config_finalize (bool): Whether to finalize connectivity after config load.
             device (str): Torch device string.
             dt (float): Discretization step.
-            tau (float): Time constant.
+            tau (float): Time constant for excitatory (``sign == "pos"``) units.
+            tau_inh (float | None): Separate time constant for inhibitory
+                (``sign == "neg"``) units. If ``None`` (default), every unit
+                shares ``tau`` and ``self.alpha`` is the original scalar
+                ``dt / tau`` — fully backward compatible. If set, ``self.alpha``
+                becomes a per-unit vector with ``dt / tau_inh`` on inhibitory
+                units (``tau_inh < tau`` gives *faster* inhibition, recovering
+                the adiabatic-inhibition regime of the reduced theory).
         """
         super(mRNN, self).__init__(
             config,
@@ -78,7 +87,47 @@ class mRNN(mRNNBase):
         )
         self.dt = dt
         self.tau = tau
+        self.tau_inh = tau_inh
+        # Scalar reference gain (excitatory dt/tau). Noise constants always use
+        # this scalar so that (a) per-unit alpha never breaks input-noise
+        # dimensions and (b) noise statistics are unchanged from the scalar-tau
+        # baseline. See mrnn_base.{hid,inp}_noise_const.
+        self.alpha_scalar = dt / tau
+        # Default: original scalar behaviour. Only becomes a per-unit vector if
+        # a separate inhibitory tau is requested AND regions already exist
+        # (config-driven build). Manual builders can call set_inhibitory_tau()
+        # after finalize_connectivity().
         self.alpha = dt / tau
+        if tau_inh is not None and len(self.region_dict) > 0:
+            self.set_inhibitory_tau(tau_inh)
+
+    def set_inhibitory_tau(self, tau_inh: float) -> torch.Tensor:
+        """Give inhibitory-region units a separate time constant ``tau_inh``.
+
+        Replaces the scalar ``self.alpha`` with a per-unit vector of shape
+        ``(total_num_units,)``: excitatory (``sign == "pos"``) units keep
+        ``dt / tau``; inhibitory (``sign == "neg"``) units use ``dt / tau_inh``.
+        The vector broadcasts over the batch dimension in :meth:`forward`, so no
+        other code path changes. Call after all recurrent regions are added
+        (automatically invoked from ``__init__`` on the config-driven path).
+        """
+        self.tau_inh = tau_inh
+        self.alpha = self._build_alpha_vector(self.dt, self.tau, tau_inh)
+        return self.alpha
+
+    def _build_alpha_vector(self, dt, tau, tau_inh) -> torch.Tensor:
+        """Per-unit update gain aligned with the hidden-state unit ordering."""
+        assert self.total_num_units > 0 and len(self.region_dict) > 0, (
+            "set_inhibitory_tau() requires recurrent regions to be defined first"
+        )
+        alpha = torch.full((self.total_num_units,), dt / tau, device=self.device)
+        idx = 0
+        for region in self.region_dict.values():
+            n = region.num_units
+            if region.sign == "neg":          # inhibitory outputs
+                alpha[idx:idx + n] = dt / tau_inh
+            idx += n
+        return alpha
 
     def batched_initial_condition(
         self, batch_size: int
