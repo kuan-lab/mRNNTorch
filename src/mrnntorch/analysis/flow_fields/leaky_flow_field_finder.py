@@ -48,14 +48,16 @@ class mFlowFieldFinder(FlowFieldFinderBase[mRNN]):
             region_list (list): Recurrent regions to include in the reduced plane.
             cancel_other_regions (bool): If ``True``, zero activity in excluded regions.
         """
+        # Keyword args: rnntoolkit >= 69d603d moved fit_states behind the
+        # grid parameters and added axes; keywords stay correct on both.
         super().__init__(
             rnn,
-            fit_states,
-            num_points,
-            x_offset,
-            y_offset,
-            x_center,
-            y_center,
+            num_points=num_points,
+            x_offset=x_offset,
+            y_offset=y_offset,
+            x_center=x_center,
+            y_center=y_center,
+            fit_states=fit_states,
         )
 
         # Unload mrnn specific kwargs
